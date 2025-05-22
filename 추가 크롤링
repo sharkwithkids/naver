@@ -1,0 +1,153 @@
+import pandas as pd
+import time
+import os
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from bs4 import BeautifulSoup
+
+def crawl_detail_data(title_id):
+    base_url = f"https://comic.naver.com/webtoon/detail?titleId={title_id}&no="
+    episodes = range(1, 6)
+    data = []
+
+    options = Options()
+    options.add_argument('--headless')
+    options.add_argument('--disable-gpu')
+    options.add_argument('window-size=1920x1080')
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+
+    try:
+        for no in episodes:
+            url = f"{base_url}{no}&week=finish"
+            driver.get(url)
+            time.sleep(2)
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+
+            try:
+                like = int(soup.select_one("em.u_cnt._count").text.strip().replace(",", ""))
+            except:
+                like = None
+
+            try:
+                star = float(soup.select_one("span.UserAction__score--sP1ha").text.strip())
+            except:
+                star = None
+
+            try:
+                tag = soup.select_one("button.UserAction__star--bi4ea span.UserAction__count--jk3vo")
+                star_cnt = int(tag.text.strip().replace(",", "").replace("참여", "").strip()) if tag else None
+            except:
+                star_cnt = None
+
+            try:
+                comment_cnt = int(soup.select_one("span.u_cbox_count").text.strip().replace(",", ""))
+            except:
+                comment_cnt = None
+
+            try:
+                best_likes = [
+                    int(tag.text.strip().replace(",", ""))
+                    for tag in soup.select("em.u_cbox_cnt_recomm")[:15]
+                ]
+            except:
+                best_likes = []
+
+            data.append({
+                "title_id": title_id,
+                "episode": no,
+                "like_count": like,
+                "star": star,
+                "star_participants": star_cnt,
+                "comment_count": comment_cnt,
+                "best_comment_likes": best_likes
+            })
+    except:
+        data = [{
+            "title_id": title_id,
+            "episode": "성인물 차단됨",
+            "like_count": None,
+            "star": None,
+            "star_participants": None,
+            "comment_count": None,
+            "best_comment_likes": []
+        }]
+    finally:
+        driver.quit()
+    return data
+
+# 실행 시작
+title_df = pd.read_csv("naver_listly_updated.csv")
+id_title_list = title_df[['ID', '제목']].astype({'ID': str}).values.tolist()
+num_id_list_total = len(id_title_list)
+num_id_csv_files = num_id_list_total // 100 + 1
+
+raw_all = []
+summary_all = []
+
+print("🚀 전체 웹툰 수:", num_id_list_total)
+
+for idx in range(num_id_csv_files):
+    start, end = idx * 100, min((idx + 1) * 100, num_id_list_total)
+    id_list = id_title_list[start:end]
+
+    print(f"\n🔄 [{idx+1}/{num_id_csv_files}] 크롤링 시작: index {start}~{end-1}")
+    t0 = time.perf_counter()
+
+    raw_rows = []
+    summary_rows = []
+    success_count = 0
+    fail_count = 0
+
+    for title_id, title in id_list:
+        rows = crawl_detail_data(title_id)
+        raw_rows.extend(rows)
+
+        if rows and isinstance(rows[0]["episode"], int):
+            success_count += 1
+            df = pd.DataFrame(rows)
+            total_likes = sum([sum(lst) for lst in df["best_comment_likes"] if lst])
+            total_counts = sum([len(lst) for lst in df["best_comment_likes"] if lst])
+            avg_best_like = round(total_likes / total_counts, 2) if total_counts > 0 else 0
+
+            summary = {
+                "title_id": title_id,
+                "title": title,
+                "avg_like_count": round(df["like_count"].mean(), 2),
+                "avg_star": round(df["star"].mean(), 2),
+                "avg_participants": round(df["star_participants"].mean(), 2),
+                "avg_comment_count": round(df["comment_count"].mean(), 2),
+                "avg_best_comment_like": avg_best_like
+            }
+        else:
+            fail_count += 1
+            summary = {
+                "title_id": title_id,
+                "title": title,
+                "avg_like_count": "성인물 차단됨",
+                "avg_star": "성인물 차단됨",
+                "avg_participants": "성인물 차단됨",
+                "avg_comment_count": "성인물 차단됨",
+                "avg_best_comment_like": "성인물 차단됨"
+            }
+        summary_rows.append(summary)
+
+    raw_df = pd.DataFrame(raw_rows)
+    summary_df = pd.DataFrame(summary_rows)
+
+    raw_df.to_csv(f"webtoon_detail_raw_{idx}.csv", index=False, encoding="utf-8-sig")
+    summary_df.to_csv(f"webtoon_detail_summary_{idx}.csv", index=False, encoding="utf-8-sig")
+
+    raw_all.append(raw_df)
+    summary_all.append(summary_df)
+
+    t1 = time.perf_counter()
+    print(f"✅ 저장 완료: webtoon_detail_raw_{idx}.csv, webtoon_detail_summary_{idx}.csv")
+    print(f"⏱️ 소요 시간: {t1 - t0:.2f}초 | 수집 성공: {success_count}, 차단: {fail_count}")
+
+# 전체 통합 저장
+pd.concat(raw_all).to_csv("webtoon_detail_raw_all.csv", index=False, encoding="utf-8-sig")
+pd.concat(summary_all).to_csv("webtoon_detail_summary_all.csv", index=False, encoding="utf-8-sig")
+print("\n🎉 전체 통합 파일 저장 완료: webtoon_detail_raw_all.csv, webtoon_detail_summary_all.csv")
