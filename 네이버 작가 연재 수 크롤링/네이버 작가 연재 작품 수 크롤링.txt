@@ -1,0 +1,47 @@
+네이버 웹툰 작가 연재 작품 수 code
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+import time
+
+def get_author_work_count(work_url):
+    options = Options()
+    options.add_argument("--headless")  # 창 띄우지 않음
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+
+    driver = webdriver.Chrome(options=options)
+
+    try:
+        # 1. 작품 상세 페이지 열기
+        driver.get(work_url)
+        time.sleep(2)
+
+        # 2. 작가 프로필 링크 클릭
+        try:
+            author_elem = driver.find_element(By.CSS_SELECTOR, 'a.ContentMetaInfo__link--xTtO6')
+            author_url = author_elem.get_attribute('href')
+        except Exception:
+            return "작가 링크 없음"
+
+        # 3. 작가 페이지 열기
+        driver.get(author_url)
+        time.sleep(2)
+
+        # 4. 작가의 작품 목록 탐색 (li 태그 수)
+        try:
+            work_items = driver.find_elements(By.CSS_SELECTOR, 'li._1w7ywmw0')
+            return len(work_items)
+        except Exception:
+            return "작가 페이지 구조 변경됨"
+
+    except Exception as e:
+        return f"에러 발생: {e}"
+
+    finally:
+        driver.quit()
+
+# 테스트용
+url = "https://comic.naver.com/webtoon/list?titleId=716857" # 테스트하고자 하는 작품으로 변경 가능
+print("연재 작품 수:", get_author_work_count(url))
